@@ -210,7 +210,7 @@ func ExportLogs(c *gin.Context) {
 	defer writer.Flush()
 
 	// 写入表头（与页面显示一致）
-	headers := []string{"时间", "用户", "令牌", "类型", "模型", "用时/首字", "输入", "输出", "花费", "实际花费", "实际用量", "渠道", "详情"}
+	headers := []string{"时间", "用户", "令牌", "类型", "模型", "用时/首字", "输入", "输出", "花费", "实际花费", "用量", "实际用量", "渠道", "详情"}
 	writer.Write(headers)
 
 	// 写入数据行
@@ -232,7 +232,7 @@ func ExportLogs(c *gin.Context) {
 		}
 
 		// 花费转人民币
-		costStr := fmt.Sprintf("¥%.6f", float64(log.Quota)*quotaToCNY)
+		costStr := fmt.Sprintf("%.6f", float64(log.Quota)*quotaToCNY)
 		var newCostStr string
 		var newQuota int
 
@@ -254,8 +254,35 @@ func ExportLogs(c *gin.Context) {
 						detailStr += " * " + details[i]
 					}
 				}
-				// 此处要重新计算实际用量和实际花费
+				// 重新计算实际用量和实际花费
+				modelRatio, _ := otherData["model_ratio"].(float64)
+				groupRatio, _ := otherData["group_ratio"].(float64)
+				completionRatio, _ := otherData["completion_ratio"].(float64)
+				cacheRatio, _ := otherData["cache_ratio"].(float64)
+				cacheTokens, _ := otherData["cache_tokens"].(float64)
+				cacheCreationRatio, _ := otherData["cache_creation_ratio"].(float64)
+				cacheCreationTokens, _ := otherData["cache_creation_tokens"].(float64)
+				cacheCreationTokens5m, _ := otherData["cache_creation_tokens_5m"].(float64)
+				cacheCreationRatio5m, _ := otherData["cache_creation_ratio_5m"].(float64)
+				cacheCreationTokens1h, _ := otherData["cache_creation_tokens_1h"].(float64)
+				cacheCreationRatio1h, _ := otherData["cache_creation_ratio_1h"].(float64)
 
+				calculateQuota := float64(log.PromptTokens)
+				calculateQuota += cacheTokens * cacheRatio
+				calculateQuota += cacheCreationTokens5m * cacheCreationRatio5m
+				calculateQuota += cacheCreationTokens1h * cacheCreationRatio1h
+				remainingCacheCreation := cacheCreationTokens - cacheCreationTokens5m - cacheCreationTokens1h
+				if remainingCacheCreation > 0 {
+					calculateQuota += remainingCacheCreation * cacheCreationRatio
+				}
+				calculateQuota += float64(log.CompletionTokens) * completionRatio
+				calculateQuota *= groupRatio * modelRatio
+
+				if modelRatio != 0 && calculateQuota <= 0 {
+					calculateQuota = 1
+				}
+				newQuota = int(calculateQuota)
+				newCostStr = fmt.Sprintf("%.6f", calculateQuota*quotaToCNY)
 			}
 		}
 
@@ -271,6 +298,7 @@ func ExportLogs(c *gin.Context) {
 			strconv.Itoa(log.CompletionTokens),
 			costStr,
 			newCostStr,
+			strconv.Itoa(log.Quota),
 			strconv.Itoa(newQuota),
 			strconv.Itoa(log.ChannelId),
 			detailStr,
